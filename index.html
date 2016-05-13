@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 
-<title>reveal.js - The HTML Presentation Framework</title>
+<title>HolyJS</title>
 
 <meta name="description" content="Presentation about javascript & postgres">
 <meta name="author" content="Nikolay Ryzhikov">
@@ -30,6 +30,17 @@ link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' 
 document.getElementsByTagName( 'head' )[0].appendChild( link );
 </script>
 
+<style>
+ img {
+     box-shadow: none !important;
+     border: none !important;
+ }
+
+ strong {
+     color: red !important;
+ }
+</style>
+
 <!--[if lt IE 9]><script src="lib/js/html5shiv.js"></script><![endif]-->
 </head>
 
@@ -38,298 +49,259 @@ document.getElementsByTagName( 'head' )[0].appendChild( link );
 <div class="reveal">
   <div class="slides">
     <section>
-      <h3>JavaScript <br/> inside  <br/>PostgreSQL</h3>
-      <h3></h3>
+      <h3>Про лошадок и слоников</h3>
       <p>
       <small>Created by <a href="http://github.com/niquola">niquola</a> / <a href="http://twitter.com/niquola">@niquola</a></small>
       </p>
     </section>
 
     <section>
-      <h5> JavaScript inside PostgreSQL</h5>
+      <h5> PostgreSQL is best db for JS</h5>
       <img src="pg-and-js.jpg"/>
     </section>
 
     <section>
-      <h3>FHIR: Fast Healthcare Interoperability Resources</h3>
-      <img src="fhir.png"/>
-    </section>
-
-    <section>
-      <h3>Polyglot</h3>
-      <img src="poliglot.jpg"/>
-      <h5>Ruby, Clojure, JVM, JavaScript, .NET ...</h5>
-    </section>
-
-    <section>
-      <img src="fhirbase.png"/>
-      <h3>fhirbase</h3>
-      <pre><code class="sql">
-       SELECT fhir.create( $JSON$
-         {
-          resourceType: "Patient",
-          name: "Ivan",
-          birthDate: "1981-01-02"
-         }
-       $JSON$);
-
-       SELECT fhir.search('Patient', 'name=ivan&birthdate=>1970');
-      </code></pre>
-    </section>
-
-    <section>
-      <h3>It works!</h3>
-      <hr/>
+      <h3>Agenda</h3>
       <ul>
-        <li>fhirface, Aidbox - clojure</li>
-        <li>Netrika (SPb) - .NET</li>
-        <li>Kainos (UK) - Java</li>
+        <li>jsonb data type & operations</li>
+        <li>indexing json</li>
+        <li>js in pg (plv8)</li>
+        <li>plv8 dev.flow</li>
+        <li>PostgREST</li>
       </ul>
     </section>
 
-    <section>
-      <h3>But, programmer UX is :(</h3>
-      <ul>
-        <li>own preprocessor</li>
-        <li>own modules</li>
-        <li>SQL & PL/PGSQL not expressive</li>
-        <li>own test framework</li>
-      </ul>
-      <br/>
-      <img src="ux.jpg"/>
+    <section data-markdown>
+      <script type="text/template">
+      ![](pg.png)
+
+      The world's most advanced open source database
+      </script>
     </section>
 
-    <section>
-      <h3>Preprocessor</h3>
-      <pre><code class="sql">
-func _build_url(_cfg_ jsonb, VARIADIC path text[]) RETURNS text
-  SELECT _cfg_->>'base' || '/' || (SELECT string_agg(x, '/')
-    FROM unnest(path) x)
-
-
-CREATE OR REPLACE FUNCTION
-module._build_url(_cfg_ jsonb, VARIADIC path text[]) RETURNS text
-AS $$
-  SELECT _cfg_->>'base' || '/' || (SELECT string_agg(x, '/')
-  FROM unnest(path) x)
-$$ language SQL immutable;
-    </code></pre>
+    <section data-markdown>
+      <script type="text/template">
+      ![](tl.png)
+      </script>
     </section>
 
-    <section>
-      <h3>Modules</h3>
-      <pre><code class="sql">
--- #import ./fhirbase_json.sql
--- #import ./fhirbase_gen.sql
--- #import ./fhirbase_coll.sql
--- #import ./fhirbase_util.sql
--- #import ./fhirbase_generate.sql
+    <section data-markdown>
+      <script type="text/template">
+        ## DataTypes
 
-func _build_url(_cfg_ jsonb, VARIADIC path text[]) RETURNS text
-  SELECT _cfg_->>'base' || '/' || (SELECT string_agg(x, '/')
-    FROM unnest(path) x)
-      </code></pre>
+        * arrays
+        * ranges
+        * timestapm with timezone
+        * uuid
+        * **jsonb** & json
+        * geometric types
+      </script>
     </section>
 
-    <section>
-      <h3>SQL PG/PLSQL</h3>
-      <pre style="height: 200%"><code class="sql" style="width: 160%; margin-left: -30%;">func _expand_search_params(_resource_type text, _query text) RETURNS setof query_param
-  WITH RECURSIVE params(parent_resource, link_path, res, chain, key, operator, value) AS (
-    SELECT null::text as parent_resource, -- we start with empty parent resoure
-           '{}'::text[] as link_path, -- path of reference attribute to join
-           _resource_type::text as res, -- this is resource to apply condition
-           ARRAY[_resource_type]::text[] || key as chain, -- initial chain
-           key as key,
-           operator as operator,
-           value as value
-    FROM fhirbase_params._parse_param(_query)
-    WHERE key[1] NOT IN ('_tag', '_security', '_profile', '_sort', '_count', '_page')
-    UNION
-    SELECT res as parent_resource, -- move res to parent_resource
-           fhirbase_coll._rest(ri.path) as link_path, -- remove first element
-           this.get_reference_type(x.key[1], re.ref_type) as res, -- set next res in chain
-           x.chain AS chain, -- save search path
-           fhirbase_coll._rest(x.key) AS key, -- remove first item from key untill only one key left
-           x.operator,
-           x.value
-     FROM  params x
-     JOIN  searchparameter ri
-       ON  ri.name = split_part(key[1], ':',1)
-      AND  ri.base = x.res
-     JOIN  structuredefinition_elements re
-       ON  re.path = ri.path
-    WHERE array_length(key,1) > 1
-  )
-  SELECT
-    parent_resource as parent_resource,
-    link_path as link_path,
-    res as resource_type,
-    fhirbase_coll._butlast(p.chain) as chain,
-    ri.search_type,
-    ri.is_primitive,
-    ri.type,
-    fhirbase_coll._rest(ri.path)::text[] as field_path,
-    fhirbase_coll._last(key) as key,
-    operator,
-    value
-  FROM params p
-  JOIN searchparameter ri
-    ON ri.base = res
-   AND ri.name = key[1]
- where array_length(key,1) = 1
-  ORDER by p.chain
-      </code></pre>
+    <section data-markdown>
+      <script type="text/template">
+      ## Same data language
+      ---
+      ## JSON and JSONB data types
+      </script>
     </section>
 
-    <section>
-      <h3>Tests</h3>
-      <pre><code class="sql">
-BEGIN;
-_extract_id('rid/_history/vid') => 'rid'
--- SELECT expect(_extract_id('rid/_history/vid'),'rid')
 
-SELECT fhirbase_generate.generate_tables('{Patient}');
+    <section data-markdown>
+      <script type="text/template">
+        ```sql
+        CREATE EXTENSION "pgcrypto";
+        -- for gen_random_uuid()
 
-setv('createOutcome',
-  fhirbase_crud.create('{}'::jsonb, :'pt_json')
-);
-
-getv('createOutcome')->>'resourceType' => 'OperationOutcome'
-getv('createOutcome')#>>'{issue,0,code,coding,1,code}' => '400'
-
-ROLLBACK;
-      </code></pre>
+        CREATE TABLE resources (
+           id uuid primary key default gen_random_uuid(),
+           resource jsonb,
+           tags text[],
+           created_at timestamptz default now()
+        );
+        ```
+      </script>
     </section>
 
-    <section>
-      <h3>Logic in DB</h3>
-      <hr/>
-      <img src="bajan.jpg"/>
+    <section data-markdown>
+      <script type="text/template">
+        ```sql
+        INSERT INTO resources (resource) 
+        VALUES (
+          $JSON$
+          {
+            "name" : "Nicola",
+            "likes" : ["pg", "clj", "fhir"]
+            "repos": [
+              {"name": "holyjs slides", "url": "github..."}
+            ]
+          }
+          $JSON$
+        )
+        ```
+      </script>
     </section>
 
-    <section>
-      <h3>Logic in DB: PRO</h3>
-      <hr/>
-      <ul>
-        <li>Performance (faster transactions, data locality)</li>
-        <li>Consistency (like incapsulation)</li>
-        <li>Integration by db</li>
-        <li>Reuse</li>
-      </ul>
+    <section data-markdown>
+      <script type="text/template">
+        ## Access elements
+
+        ```sql
+        SELECT resource->>'name'; => "nicola"::text
+
+        SELECT resource#>>'{repos,0,name}'; => "holyjs slides"::text
+
+        SELECT resource#>'{repos,0}';
+        => {"name": "holyjs slides", "url": "github..."}
+
+        ```
+      </script>
     </section>
 
-    <section>
-      <h3>Logic in DB: CONTRA</h3>
-      <hr/>
-      <ul>
-        <li>Overload database</li>
-        <li>No good pracitces (TDD, modules etc)</li>
-        <li>Archaic languages</li>
-        <li>Slow development</li>
-      </ul>
+    <section data-markdown>
+      <script type="text/template">
+        ## Building JSON
+
+
+        ```sql
+SELECT jsonb_build_object(
+    'name', "nicola",
+    'reops', (SELECT json_agg(row_to_json(x.*))
+              FROM repos WHERE id='nicola')
+); =>
+
+{"name": "nicola", "repos": [{"name": "Holyjs slides"}]}
+        ```
+      </script>
     </section>
 
-    <section>
-      <h3>Unresolvable?</h3>
-      <hr/>
-      <ul>
-        <li>+modern language</li>
-        <li>+modularity</li>
-        <li>+packages</li>
-        <li>+good practices</li>
-      </ul>
+    <section data-markdown>
+      <script type="text/template">
+        ## JSON -> Relation
+
+
+        ```sql
+        SELECT x.name, x.url
+          FROM jsonb_array_elements(resource->'repos') x; 
+        =>
+        "holyjs slides" | "github..."" 
+        "pgday  slides" | "github..."" 
+        ```
+      </script>
     </section>
 
-    <section>
-      <h3>Postgres: OS for data</h3>
-      <hr/>
-      <ul>
-        <li>extensions (SQL, C, C++)</li>
-        <li>custom types</li>
-        <li>advanced indexes</li>
-        <li>pluggable languages (python, plpgsql)</li>
-        <li>FDW (Foreign Data Wrappers)</li>
-      </ul>
+    <section data-markdown>
+      <script type="text/template">
+        ## Relation -> JSON
+
+
+        ```sql
+        SELECT json_agg(row_to_json(x.*)) FROM users;
+        =>
+        [
+          {id: 1, "name": "nicola"},
+          {id: 2, "name": "ivan"}
+        ]
+        ```
+      </script>
     </section>
 
-    <section>
-      <h3>pg: extensions</h3>
-      <hr/>
-      <pre><code class="sql">
-  -- PostGIS: a spatial database extender
-  SELECT superhero.name
-  FROM city, superhero
-  WHERE ST_Contains(city.geom, superhero.geom)
-  AND city.name = 'Gotham';
-      </code></pre>
-      <br/>
-      <a href="http://pgxn.org/">http://pgxn.org/</a>
+    <section data-markdown>
+      <script type="text/template">
+        ## [More Functions](http://www.postgresql.org/docs/9.5/static/functions-json.html)
+      </script>
     </section>
 
-    <section>
-      <h3>pg: custom types</h3>
-      <hr/>
-      <pre><code class="sql">
-  CREATE TYPE address AS (city text, street text);
 
-  typedef struct Complex {
-      double      x;
-      double      y;
-  } Complex;
+    <section data-markdown>
+      <script type="text/template">
+        ## JSON vs JSONB
 
-  CREATE FUNCTION complex_in(cstring)
-  RETURNS complex AS 'filename'
-  LANGUAGE C IMMUTABLE STRICT;
-      </code></pre>
+        TODO: performance
+      </script>
     </section>
 
-    <section>
-      <h3>pg: indexes</h3>
-      <hr/>
-      <pre><code class="sql">
--- GIN Index
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE INDEX users_search_idx ON users
-USING gin (first_name gin_trgm_ops, last_name gin_trgm_ops);
+    <section data-markdown>
+      <script type="text/template">
+        ## SEARCH
 
-SELECT count(*) FROM users where first_name ilike '%aeb%';
-      </code></pre>
-      <br/>
+        ```sql
+        SELECT *
+          FROM resources
+         WHERE resource->>'name' ilike '%cola%'
+           AND json_array_length(resource->'likes') > 3
+        ```
+      </script>
     </section>
 
-    <section>
-      <h3>pg: languages</h3>
-      <hr/>
-      <pre><code class="sql">
-CREATE LANGUAGE plpython;
-CREATE FUNCTION pymax (a integer, b integer)
-  RETURNS integer
-AS $$
-  if a > b:
-    return a
-  return b
-$$ LANGUAGE plpythonu;
-      </code></pre>
-      <br/>
+    <section data-markdown>
+      <script type="text/template">
+        ## FAST SEARCH
+
+        ```sql
+        CREATE index likes_count_idx
+            ON resources
+               (json_array_length(resource->'likes'))
+        ```
+      </script>
     </section>
 
-    <section>
-      <h3>pg: FDW</h3>
-      <hr/>
-      <pre><code class="sql">
-CREATE EXTENSION file_fdw;
-CREATE SERVER data FOREIGN DATA WRAPPER file_fdw;
-CREATE FOREIGN TABLE pglog (
-  name text,
-  address tetx
-) SERVER data
-OPTIONS ( filename '/users.csv', format 'csv' );
-      </code></pre>
-      <br/>
+    <section data-markdown>
+      <script type="text/template">
+        ## FAST SEARCH
+
+        ```sql
+        CREATE index name_idx
+            ON resources
+         USING gin (resource->>'name' gin_trgm_ops);
+        ```
+      </script>
     </section>
 
-    <section>
-      <h3>What is a most popular lang now?</h3>
+    <section data-markdown>
+      <script type="text/template">
+        ## JSQUERY
+
+        ```sql
+        CREATE EXTENSION "jsquery";
+
+        SELECT *
+          FROM your_table
+         WHERE column @@ '<jsquery expression>'
+        ```
+      </script>
+    </section>
+
+    <section data-markdown>
+      <script type="text/template">
+        ## JSQUERY EXPR
+
+        ```sql
+        resourceType = "Patient" AND
+        name.# (given.# = "Jim" AND use = "usual") AND
+        length.value($ > 135 AND $ < 145)>)
+        ```
+      </script>
+    </section>
+
+    <section data-markdown>
+      <script type="text/template">
+        ## JSQUERY as validator
+
+        ```sql
+
+        CREATE TABLE js (
+          id serial,
+          data jsonb,
+          CHECK (data @@ '
+            name IS STRING AND
+            similar_ids.#: IS NUMERIC AND
+            points.#:(x IS NUMERIC AND y IS NUMERIC)
+          '::jsquery)
+        );
+
+        ```
+      </script>
     </section>
 
     <section>
@@ -349,12 +321,12 @@ OPTIONS ( filename '/users.csv', format 'csv' );
       <h3>plv8: functions</h3>
       <pre><code class="sql">
   CREATE FUNCTION plv8_test(keys text[], vals text[])
-  RETURNS text AS $$
+  RETURNS json AS $$
     var o = {};
     for(var i=0; i&lt;keys.length; i++){
         o[keys[i]] = vals[i];
     }
-    return JSON.stringify(o);
+    return o;
   $$ LANGUAGE plv8 IMMUTABLE STRICT;
 
   SELECT plv8_test(ARRAY['name', 'age'], ARRAY['Tom', '29']);
@@ -388,8 +360,7 @@ SELECT * FROM set_of_records();
 
     <section>
       <h3>plv8: triggers</h3>
-      <pre><code class="sql">
-CREATE FUNCTION test_trigger() RETURNS trigger AS
+      <pre><code class="sql">CREATE FUNCTION test_trigger() RETURNS trigger AS
 $$
     plv8.elog(NOTICE, "NEW = ", JSON.stringify(NEW));
     plv8.elog(NOTICE, "OLD = ", JSON.stringify(OLD));
@@ -411,7 +382,7 @@ CREATE TRIGGER test_trigger
 
 
     <section>
-      <h3>plv8: cursors</h3>
+      <h3>plv8: prepared statements</h3>
       <pre><code class="js">
   var plan = plv8.prepare(
    'SELECT * FROM tbl WHERE col = $1', ['int']
@@ -428,25 +399,28 @@ CREATE TRIGGER test_trigger
       <br/>
     </section>
 
-    <section>
-      <h3>plv8: performance</h3>
-      <pre><code class="js">
-      </code></pre>
-      <br/>
+    <section data-markdown>
+      <script type="text/template">
+      ## ES6 Features
+      ```
+      SET plv8.v8_flags = '--es_staging';
+      ```
+      </script>
+    </section>
+
+    <section data-markdown>
+      <script type="text/template">
+      ## Dev Environment
+      ---
+      ### PG + PLV8 + NODEJS = ♥
+      </script>
     </section>
 
     <section>
-      <h3>PG + PLV8 + NODEJS?</h3>
-      <hr/>
-      <img src="happy.jpg"/>
-    </section>
-
-    <section>
-      <h3>pg.js: concept</h3>
-      <hr/>
       <ul>
          <li>write in node</li>
-         <li>compile into plv8</li>
+         <li>test in node</li>
+         <li>compile and deploy into plv8</li>
       </ul>
     </section>
 
@@ -456,7 +430,7 @@ CREATE TRIGGER test_trigger
 var Client = require('pg-native')
 
 var client = new Client()
-client.connectSync('postgres://root:root@localhost:5432/test');
+client.connectSync(env.DATABASE_URL);
 
 module.exports = {
   execute: function(){
@@ -464,7 +438,8 @@ module.exports = {
   },
   elog: function(x, msg){
     console.log(msg)
-  }
+  },
+  ...
 }
 ..
 </code></pre>
@@ -473,15 +448,9 @@ module.exports = {
 
     <section>
       <h3>pg.js: write in node</h3>
-<pre><code class="coffee">
-util = require('./util')
-uuid = (plv8)->
-  plv8.execute('select gen_random_uuid() as uuid')[0].uuid
-
-exports.uuid = uuid
-create = (plv8, resource)->
+<pre><code class="coffee">util = require('./util')
+exports.create = (plv8, resource)->
   table_name = util.table_name(resource_type)
-  # ...
   json  = JSON.stringify(resource)
   res = plv8.execute """
     INSERT INTO #{table_name}
@@ -489,6 +458,8 @@ create = (plv8, resource)->
     VALUES ($1,$2,$3)
     """, [logical_id, version_id, json]
   resource
+
+exports.create.plv8_signature = ['json', 'json']
 </code></pre>
     </section>
 
@@ -527,7 +498,6 @@ create = (plv8, resource)->
         plv8_exports[k] ={fn: v, filename: filename}
 
 </code></pre>
-<a href="https://github.com/niquola/pgpp/blob/master/lib/node2pl.coffee">github</a>
     </section>
 
     <section>
@@ -550,22 +520,41 @@ create = (plv8, resource)->
 </code></pre>
     </section>
 
-    <section>
-      <h3>pg.js: call in postgres</h3>
-<pre><code class="sql">
-select fhir.read('StructureDefinition', 'Patient') as read
-</code></pre>
-    </section>
+<section data-markdown>
+  <script type="text/template">
+  ## fhirbase
+  ---
 
-    <section>
-      <h3>pg.js: Road Map</h3>
-      <hr/>
-      <ul>
-        <li>Remove death code (Google closure)</li>
-        <li>Implement most of plv8</li>
-        <li>Make it npm package</li>
-      </ul>
-    </section>
+  Health IT standard implementation
+
+  </script>
+</section>
+
+<section data-markdown>
+  <script type="text/template">
+  ## PostgREST 
+  ---
+
+  ```
+  GET /projects?id=eq.1&select=id, name, client{*}
+
+  POST /rpc/proc_name
+  { "args": 1 }
+
+  POST /table_name
+  { "col1": "value1", "col2": "value2" }
+
+  ```
+
+  </script>
+</section>
+
+<section data-markdown>
+  <script type="text/template">
+  ## Isomorphic apps
+  </script>
+</section>
+
 
     <section>
       <h3>Thx</h3>
